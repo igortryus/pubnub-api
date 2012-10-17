@@ -271,9 +271,9 @@ class Pubnub
       request.format_url!
       #puts("- Fetching #{request.url}")
 
-      begin
+      Thread.new {
+        begin
         
-        Thread.new {
           conn = PubnubDeferrable.new(request.url)
           conn.pubnub_request = request
           req = conn.get(:keepalive => true, :timeout=> 310) #client times out in 310s unless the server returns or timeout first
@@ -310,13 +310,13 @@ class Pubnub
               request.callback.call(Yajl::Parser.parse(req.response))
             end
           }
-        }
-
-      rescue EventMachine::ConnectionError => e
-        error_message = "Network Error: #{e.message}"
-        puts(error_message)
-        return [0, error_message]
-      end
+        
+        rescue EventMachine::ConnectionError, RuntimeError => e # RuntimeError for catching "EventMachine not initialized"
+          error_message = "Network Error: #{e.message}"
+          puts(error_message)
+          return [0, error_message]
+        end
+      }
 
     end
   end
