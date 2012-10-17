@@ -257,68 +257,56 @@ class Pubnub
   end
 
   def _request(request)
+    request.format_url!
+    #puts("- Fetching #{request.url}")
 
-    if (defined?(Rails) && Rails.present? && Rails.env.present?) && Rails.env.test?
+    Thread.new {
+      begin
 
-      open(request.url, 'r', :read_timeout => 300) do |response|
-        request.package_response!(response.read)
-        request.callback.call(request.response)
-        request.response
+        conn = PubnubDeferrable.new(request.url)
+        conn.pubnub_request = request
+        req = conn.get(:keepalive => true, :timeout=> 310) #client times out in 310s unless the server returns or timeout first
+
+        req.errback{
+          if req.response.blank?
+            puts("#{Time.now}: Reconnecting from timeout.")
+            _request(request)
+          else
+            error_message = "Unknown Error: #{req.response.to_s}"
+            puts(error_message)
+            request.callback.call([0, error_message])
+
+            _request(request)
+          end
+        }
+
+        req.callback{
+          only_success_status_is_acceptable = 200
+          if req.response_header.http_status.to_i != only_success_status_is_acceptable
+            error_message = "Server Error, status: #{req.response_header.http_status}, extended info: #{req.response}"
+
+            puts(error_message)
+          end
+
+          if %w(subscribe presence).include?(request.operation)
+
+            request.package_response!(req.response)
+            request.callback.call(request.response)
+
+            _request(request)
+          else
+            request.package_response!(req.response)
+            request.callback.call(request.response)
+          end
+        }
+
+      rescue EventMachine::ConnectionError, RuntimeError => e # RuntimeError for catching "EventMachine not initialized"
+        error_message = "Network Error: #{e.message}"
+        puts(error_message)
+        return [0, error_message]
       end
+    }
 
-    else
-
-      request.format_url!
-      #puts("- Fetching #{request.url}")
-
-      Thread.new {
-        begin
-        
-          conn = PubnubDeferrable.new(request.url)
-          conn.pubnub_request = request
-          req = conn.get(:keepalive => true, :timeout=> 310) #client times out in 310s unless the server returns or timeout first
-
-          req.errback{
-            if req.response.blank?
-              puts("#{Time.now}: Reconnecting from timeout.")
-              _request(request)
-            else
-              error_message = "Unknown Error: #{req.response.to_s}"
-              puts(error_message)
-              request.callback.call([0, error_message])
-
-              _request(request)
-            end
-          }
-
-          req.callback{
-            only_success_status_is_acceptable = 200
-            if req.response_header.http_status.to_i != only_success_status_is_acceptable
-              error_message = "Server Error, status: #{req.response_header.http_status}, extended info: #{req.response}"
-
-              puts(error_message)
-            end
-
-            if %w(subscribe presence).include?(request.operation)
-
-              request.package_response!(req.response)
-              request.callback.call(Yajl::Parser.parse(req.response))
-
-              _request(request)
-            else
-              request.package_response!(req.response)
-              request.callback.call(Yajl::Parser.parse(req.response))
-            end
-          }
-        
-        rescue EventMachine::ConnectionError, RuntimeError => e # RuntimeError for catching "EventMachine not initialized"
-          error_message = "Network Error: #{e.message}"
-          puts(error_message)
-          return [0, error_message]
-        end
-      }
-
-    end
   end
 
 end
